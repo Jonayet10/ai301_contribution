@@ -171,14 +171,14 @@ Using UMPIRE framework (adapted):
 
 - In one terminal, do (start the backend)
 `
-cd /Users/jonayet/Desktop/ai301/stump
-source .devenv.sh
-cargo run -p stump_server
+- cd /Users/jonayet/Desktop/ai301/stump
+- source .devenv.sh
+- cargo run -p stump_server
 `
 
 - In another terminal, do (start the frontend)
 `
-cd /Users/jonayet/Desktop/ai301/stump
-source .devenv.sh
-yarn web dev
+- cd /Users/jonayet/Desktop/ai301/stump
+- source .devenv.sh
+- yarn web dev
 `
