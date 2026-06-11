@@ -166,18 +166,3 @@ Using UMPIRE framework (adapted):
 
 - [Stump contributing guide](https://github.com/stumpapp/stump/blob/develop/CONTRIBUTING.md)
 - [GitHub issue #119](https://github.com/stumpapp/stump/issues/119)
-
-HOW TO RUN
-==========
-
-The app requires two terminals: one for the backend, one for the frontend.
-
-1) Start the backend
-   cd /Users/jonayet/Desktop/ai301/stump
-   source .devenv.sh
-   cargo run -p stump_server
-
-2) Start the frontend (in a separate terminal)
-   cd /Users/jonayet/Desktop/ai301/stump
-   source .devenv.sh
-   yarn web dev
