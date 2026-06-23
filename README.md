@@ -164,33 +164,71 @@ But there is **no code that exposes or populates it**:
 
 ### Analysis
 
-[To be filled in after exploring the codebase]
+Exploring the codebase revealed that the data layer for reviews **already exists but is completely unused above the database**:
+
+- A `reviews` entity is defined at `crates/models/src/entity/review.rs` (`id`, `rating`, `content`, `is_private`, `media_id`, `user_id`).
+- The `reviews` table is created by the init migration (`crates/migrations/src/m20250807_202824_init.rs`), with foreign keys to `media` and `users`.
+
+What was missing was everything that exposes or writes to that table:
+
+- **No permission** to gate the feature — the `UserPermission` enum (`crates/models/src/shared/enums.rs`) had no review-related variant.
+- **No API surface** — no GraphQL mutation to create a review, and no field resolvers to read them.
+- **No display** — the `BookOverviewScene` had no UI for ratings or reviews.
+
+Stump's backend is built with **Rust + async-graphql + SeaORM**. GraphQL types follow a consistent pattern: SeaORM entity `Model`s are wrapped in `SimpleObject` structs (e.g. `object/tag.rs`, `object/bookmark.rs`), input types implement an `into_active_model` helper (e.g. `input/reading_list.rs`), mutations are grouped into `MergedObject`s (`mutation/mod.rs`), and relational data is exposed as field resolvers on the parent object via `#[ComplexObject]` (e.g. `Media::tags`).
+
+The maintainer scoped the work explicitly: add a `CreatePublicReview` permission (gating only *public* reviews — private reviews are a personal record and need no gate), a create mutation, and two field resolvers on the `Media` object (`reviews` and `averageRating`). The UI is to be a separate, isolated contribution.
 
 ### Proposed Solution
 
-[To be filled in]
+A **backend-only** pull request that exposes the existing `reviews` table through GraphQL, scoped to match the maintainer's direction. The frontend (`BookOverviewScene` UI) is intentionally deferred to a separate PR to keep each change reviewable.
+
+The backend change consists of:
+
+1. A new `CreatePublicReview` permission, gating only public reviews.
+2. A `Review` GraphQL object type wrapping the existing entity.
+3. A `ReviewInput` type with built-in 1–5 rating validation.
+4. A `createReview` mutation that enforces the permission **only when the review is public**.
+5. `reviews` and `averageRating` field resolvers on the `Media` object, with privacy-aware visibility.
 
 ### Implementation Plan
 
 Using UMPIRE framework (adapted):
 
-**Understand:** Stump needs a ratings and reviews feature for books, with RBAC controls, public/private visibility, and display on the BookOverviewScene.
+**Understand:** Stump needs a ratings and reviews feature for books, with RBAC controls, public/private visibility, and display on the BookOverviewScene. The database scaffolding already exists; the gap is the permission, the API surface, and the UI.
 
-**Match:** [To be filled in after reviewing similar patterns in the codebase]
+**Match:** Mirrored existing Stump conventions rather than inventing new ones:
+- Permission added to the `UserPermission` enum in the same doc-commented style as the `improve-permissioning` branch.
+- `Review` object modeled on `object/tag.rs` / `object/bookmark.rs` (a flattened `SimpleObject` over the entity `Model`).
+- `ReviewInput` modeled on `input/reading_list.rs`, including an `into_active_model` helper and unit tests.
+- `createReview` mutation modeled on `ReadingListMutation`, grouped into the existing `ContentMutations` merged object.
+- `reviews` / `averageRating` resolvers modeled on the `Media::tags` field resolver.
+- Permission enforcement reused the existing `AuthContext::enforce_permissions` helper (`data.rs`).
 
-**Plan:**
-1. Add database schema fields/tables for ratings and reviews
-2. Implement backend API endpoints to create, read, and manage ratings/reviews
-3. Build the frontend UI components for rating input and review text
-4. Add RBAC toggle logic for admins
-5. Display average rating and reviews on `BookOverviewScene`
-6. Write tests
+**Plan** (revised after exploration — the DB layer turned out to already exist, and the work splits cleanly into a backend PR and a separate UI PR):
 
-**Implement:** [Link to branch/commits to be added as work progresses]
+1. ~~Add database schema fields/tables for ratings and reviews~~ — **already present** (entity + migration). No change needed.
+2. Add a `CreatePublicReview` permission (RBAC toggle), gating only public reviews.
+3. Add a `Review` GraphQL object type and a `ReviewInput` input type (with 1–5 validation).
+4. Implement a `createReview` mutation with a runtime public-review permission check.
+5. Implement `reviews` and `averageRating` field resolvers on the `Media` object, with public/private visibility.
+6. Regenerate the GraphQL schema (`cargo codegen`).
+7. Write tests (unit + integration).
+8. *(Separate PR)* Build the frontend UI: rating input, markdown/spoiler review rendering, and display of average rating + reviews on `BookOverviewScene`.
 
-**Review:** [Self-review checklist to be completed]
+**Implement:** Branch `feat/book-reviews-backend` (based on `nightly`, per the contributing guidelines). Backend implementation complete; schema regeneration and integration tests in progress.
 
-**Evaluate:** [Verification approach to be added]
+**Review:** Self-review checklist:
+- [x] Permission gates only public reviews; private reviews are ungated.
+- [x] Review author is taken from the authenticated session, never client input (no forging reviews as another user).
+- [x] Private reviews are never returned to other users by the `reviews` resolver.
+- [x] Private ratings are excluded from `averageRating` (no leakage via the aggregate).
+- [x] Rating constrained to 1–5 at the schema level.
+- [x] Each crate compiles cleanly (`cargo build -p models`, `cargo build -p graphql`).
+- [ ] `cargo fmt` and `cargo clippy` pass.
+- [ ] Integration tests covering visibility and permission enforcement pass.
+
+**Evaluate:** Verified by (a) per-crate compilation after each step, (b) unit tests on the input's `into_active_model`, and (c) planned integration tests that exercise the create mutation and both resolvers end-to-end against a test database, asserting the visibility and permission rules.
 
 ---
 
@@ -198,18 +236,20 @@ Using UMPIRE framework (adapted):
 
 ### Unit Tests
 
-- [ ] Test case 1: Rating can be created and retrieved for a book
-- [ ] Test case 2: Review text is correctly associated with a rating
-- [ ] Test case 3: RBAC toggle correctly restricts rating/review access per user
+- [x] Test case 1: `ReviewInput::into_active_model` maps fields correctly (rating, content, privacy, author).
+- [x] Test case 2: Review text (`content`) is correctly associated, including the `None` (rating-only) case.
+- [ ] Test case 3: RBAC toggle correctly restricts public-review creation per user.
 
 ### Integration Tests
 
-- [ ] Rating and review data flows correctly from backend to BookOverviewScene
-- [ ] Public/private visibility settings are respected across users
+- [ ] A review can be created and retrieved for a book via the GraphQL API.
+- [ ] Public/private visibility is respected: a user's private review is visible to them but hidden from other users; public reviews are visible to all.
+- [ ] `averageRating` returns the correct mean over public reviews and `null` when there are none.
+- [ ] Creating a public review without `CreatePublicReview` is rejected; creating a private review is always allowed; a server owner bypasses the check.
 
 ### Manual Testing
 
-[To be filled in]
+Reproduction of the feature's absence was performed manually before implementation (see *Reproduction Evidence*): the running app showed no rating/review UI on `BookOverviewScene`, and the GraphQL schema rejected `reviews` / `averageRating` queries on the `Media` type. Post-implementation manual verification (via the GraphiQL playground at `/api/graphql`) is planned to confirm the new mutation and resolvers behave as expected.
 
 ---
 
@@ -217,11 +257,17 @@ Using UMPIRE framework (adapted):
 
 ### Week 1 Progress
 
-[To be filled in]
+Set up the local development environment on macOS (Rust 1.92.0, Node 22, Yarn 1.22.21), built and ran the Stump server + web client, and reproduced the issue. Confirmed the feature's absence across all three layers (UI, GraphQL API, and unused DB table). Branched `feat/book-reviews-backend` off `nightly` per the contributing guidelines.
 
 ### Week 2 Progress
 
-[To be filled in]
+Implemented the backend feature, mirroring existing codebase conventions:
+- Added the `CreatePublicReview` permission.
+- Added the `Review` object type and `ReviewInput` (with 1–5 validation and unit tests).
+- Implemented the `createReview` mutation with a runtime public-review permission check.
+- Implemented the `reviews` and `averageRating` field resolvers on `Media`, with privacy-aware visibility.
+
+Each step was verified to compile. Remaining: regenerate the GraphQL schema, add integration tests, run `fmt`/`clippy`, and open the PR.
 
 ### Week 3 Progress
 
@@ -229,11 +275,25 @@ Using UMPIRE framework (adapted):
 
 ### Code Changes
 
-- **Files modified:** [To be filled in]
-- **Key commits:** [To be filled in]
-- **Approach decisions:** [To be filled in]
+- **Files modified:**
+  - `crates/models/src/shared/enums.rs` — added `CreatePublicReview` permission.
+  - `crates/models/src/entity/review.rs` — derived `SimpleObject` on the entity model.
+  - `crates/graphql/src/object/review.rs` *(new)* — `Review` object type.
+  - `crates/graphql/src/object/mod.rs` — registered the `review` object module.
+  - `crates/graphql/src/input/review.rs` *(new)* — `ReviewInput` + unit tests.
+  - `crates/graphql/src/input/mod.rs` — registered the `review` input module.
+  - `crates/graphql/src/mutation/review.rs` *(new)* — `ReviewMutation` / `createReview`.
+  - `crates/graphql/src/mutation/mod.rs` — wired `ReviewMutation` into `ContentMutations`.
+  - `crates/graphql/src/object/media.rs` — added `reviews` and `averageRating` resolvers.
+- **Key commits:** [To be added when committed]
+- **Approach decisions:**
+  - **Reused the existing DB layer.** The `reviews` entity and table already existed, so no migration was needed.
+  - **Gated only public reviews.** Because the gate depends on the request's `is_private` value, it is a *runtime* check inside the mutation (`enforce_permissions`) rather than a static `#[graphql(guard)]` attribute. Private reviews are intentionally ungated.
+  - **Privacy defaults to safe.** `is_private` defaults to `true`, so a client must explicitly opt into a public review (which then requires the permission).
+  - **Author from session, not input.** The reviewing user is set from `AuthContext`, preventing forged authorship.
+  - **`averageRating` excludes private reviews** to avoid leaking a user's private rating through the public aggregate; returns `null` (not `0`) when there are no public reviews.
+  - **Direct queries, not DataLoaders.** Suitable for the single-book `BookOverviewScene`; noted as a future change if reviews ever render across lists of books (to avoid N+1 queries).
 
----
 
 ## Pull Request
 
